@@ -27,8 +27,8 @@ The server returned an nginx welcome page rather than a `robots.txt` body. A mis
 - [x] Stage 0 — classify scraping target
 - [x] Stage 1 — fetch and cache HTML
 - [x] Stage 2 — discover three catalogue pages
-- [ ] Stage 3 — normalize
-- [ ] Stage 4 — validate
+- [x] Stage 3 — extract book details
+- [ ] Stage 4 — normalize
 - [ ] Stage 5 — store
 - [ ] Stage 6 — report
 
@@ -98,4 +98,52 @@ cd scraper
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python src/main.py
+```
+
+## Stage 3 — extract the raw records
+
+For each of the 60 book URLs discovered in Stage 2, `scraper/src/main.py`
+re-uses the same `get_page()` (user-agent, 10s timeout, status check,
+0.5s delay between real fetches, cache-first) and parses the body with
+Beautiful Soup.
+
+Selectors are scoped to the **product area**, not the whole document:
+
+| Field               | Selector (inside `div.product_main` unless noted)               |
+| ------------------- | --------------------------------------------------------------- |
+| `title`             | `h1`                                                            |
+| `price_text`        | `p.price_color`                                                 |
+| `availability_text` | `p.instock.availability`                                        |
+| `rating_text`       | `p.star-rating` → class other than `star-rating` (e.g. `Three`) |
+| `description`       | first `<p>` after `#product_description` (may be `null`)        |
+
+`product_url` is the URL we just fetched, `source_page` is the
+catalogue page that book was discovered on, and `fetched_at` is the
+current UTC time in ISO 8601 form (`2026-08-23T19:01:53Z`). The 60
+records are written to `data/raw/books.json` (gitignored).
+
+If a book page has no description, the record's `description` is
+`null` — the code never invents text. A sample record from the run:
+
+```json
+{
+  "title": "A Light in the Attic",
+  "product_url": "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html",
+  "price_text": "£51.77",
+  "availability_text": "In stock (22 available)",
+  "rating_text": "Three",
+  "description": "It's hard to imagine a world without A Light in the Attic...",
+  "source_page": "https://books.toscrape.com/catalogue/page-1.html",
+  "fetched_at": "2026-08-23T19:01:53Z"
+}
+detail_pages=60
+```
+
+Sanity check on the saved set (60 records, all 8 keys present):
+
+```
+rating distribution: [('One', 15), ('Five', 14), ('Three', 13), ('Four', 10), ('Two', 8)]
+source pages:         [page-1.html: 20, page-2.html: 20, page-3.html: 20]
+unique product_url:   60
+records with null description: 0  (all 60 happened to have one; the field is null-safe)
 ```
