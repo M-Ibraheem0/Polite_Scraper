@@ -251,3 +251,80 @@ every product_url unique:            True
 sorted by product_url:               True
 price_gbp == float(price_text):      True
 ```
+
+## Stage 5 — survive failures, report the run
+
+### One bad page must not kill the run
+
+Each book page is fetched and parsed inside its own `try/except` in
+`extract_books()`. A broken page is printed to stderr, counted in
+`failed_pages`, and skipped — the other 59 records survive. A catalogue
+page failing is the one exception: nothing can be discovered then, so
+the run aborts (and still writes a report).
+
+### Retry policy (`fetch()`)
+
+`MAX_ATTEMPTS = 2` with `RETRY_DELAY_SECONDS = 1.0`:
+
+| Situation                 | Behaviour                                  |
+|---------------------------|--------------------------------------------|
+| timeout / connection error| wait 1s, retry once; give up if it fails again |
+| 5xx, 408, 425, 429        | wait 1s, retry once; give up if it persists |
+| 404 (does not exist)      | **no retry** — asking again won't create it |
+| 403 (site said no)        | **no retry** — asking again makes a pest   |
+
+Verified with mocked `requests.get` (no real traffic):
+```
+500 then 200        -> status: 200 / calls: 2
+persistent 5xx      -> RuntimeError: retryable HTTP 503 / calls: 2
+timeout then 200    -> status: 200 / calls: 2
+persistent timeout  -> ReadTimeout / calls: 2
+404                 -> status: 404 / calls: 1   (no retry)
+403                 -> status: 403 / calls: 1   (no retry)
+```
+
+### Run report
+
+Every run ends by writing `output/run-report.json`:
+
+```json
+{
+  "catalogue_pages": 3,
+  "pages_fetched": 1,
+  "cache_hits": 63,
+  "book_urls_discovered": 61,
+  "valid_records": 60,
+  "invalid_records": 0,
+  "failed_pages": 1,
+  "failed_page_urls": ["https://books.toscrape.com/catalogue/__made-up-book__/index.html"],
+  "injected_fake_url": "https://books.toscrape.com/catalogue/__made-up-book__/index.html",
+  "duration_seconds": 2.306,
+  "started_at": "2026-08-23T19:14:40Z"
+}
+```
+
+### Failure proof (break our side, not the site)
+
+Fault injection is done on our own list via `--inject-fake <URL>`, which
+appends one made-up book URL to the discovery list. The sandbox returns
+404 for it (never retried), the page is skipped, and the run still
+finishes with the 60 real records:
+
+```
+$ .venv/bin/python scraper/src/main.py --inject-fake \
+    "https://books.toscrape.com/catalogue/__made-up-book__/index.html"
+injected fake URL for failure test: https://books.toscrape.com/catalogue/__made-up-book__/index.html
+FAILED: https://books.toscrape.com/catalogue/__made-up-book__/index.html: HTTP 404 for ...
+catalogue_pages=3
+pages_fetched=1
+cache_hits=63
+book_urls_discovered=61
+valid_records=60
+invalid_records=0
+failed_pages=1
+run-report: .../scraper/output/run-report.json
+```
+
+Checkpoint result: the run finishes (`exit=0`), `output/books.json`
+still holds exactly 60 records, and `run-report.json` shows
+`failed_pages: 1`. A clean run reports `failed_pages: 0`.
