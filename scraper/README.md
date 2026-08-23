@@ -26,7 +26,7 @@ The server returned an nginx welcome page rather than a `robots.txt` body. A mis
 
 - [x] Stage 0 — classify scraping target
 - [x] Stage 1 — fetch and cache HTML
-- [ ] Stage 2 — extract
+- [x] Stage 2 — discover three catalogue pages
 - [ ] Stage 3 — normalize
 - [ ] Stage 4 — validate
 - [ ] Stage 5 — store
@@ -56,3 +56,46 @@ bytes: 50,469
 - Timeout: 10s
 - Only HTTP 200 is treated as success; anything else prints `FETCH FAILED: HTTP <code>` and exits 1.
 - The cache directory is git-ignored; the saved HTML stays on disk for local development only.
+
+## Stage 2 — discover three catalogue pages
+
+`scraper/src/main.py` parses each cached catalogue page with Beautiful
+Soup, collects the relative `h3 > a` href inside every
+`article.product_pod`, and turns each one into an absolute URL with
+`urllib.parse.urljoin` (no string concatenation). It then follows the
+catalogue's own `li.next > a` link — page 2, then page 3 — and stops
+when there is no next link or `MAX_PAGES = 3` is reached. The 60 URLs
+are deduplicated with `dict.fromkeys` (order preserved).
+
+A 0.5s `time.sleep` is inserted only between real network fetches;
+cached pages never trigger a delay.
+
+```
+$ .venv/bin/python scraper/src/main.py
+FETCH:     https://books.toscrape.com/catalogue/page-1.html -> 20 books
+FETCH:     https://books.toscrape.com/catalogue/page-2.html -> 20 books
+FETCH:     https://books.toscrape.com/catalogue/page-3.html -> 20 books
+catalogue_pages=3
+discovered=60
+unique_urls=60
+
+$ .venv/bin/python scraper/src/main.py   # second run, all from cache
+CACHE HIT: https://books.toscrape.com/catalogue/page-1.html -> 20 books
+CACHE HIT: https://books.toscrape.com/catalogue/page-2.html -> 20 books
+CACHE HIT: https://books.toscrape.com/catalogue/page-3.html -> 20 books
+catalogue_pages=3
+discovered=60
+unique_urls=60
+```
+
+### Local environment
+
+The project uses a venv at `scraper/.venv/` (gitignored) to keep
+dependencies out of the system Python:
+
+```bash
+cd scraper
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python src/main.py
+```
