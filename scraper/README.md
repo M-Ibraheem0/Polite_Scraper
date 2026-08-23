@@ -25,9 +25,34 @@ The server returned an nginx welcome page rather than a `robots.txt` body. A mis
 ## Status
 
 - [x] Stage 0 — classify scraping target
-- [ ] Stage 1 — fetch
+- [x] Stage 1 — fetch and cache HTML
 - [ ] Stage 2 — extract
 - [ ] Stage 3 — normalize
 - [ ] Stage 4 — validate
 - [ ] Stage 5 — store
 - [ ] Stage 6 — report
+
+## Stage 1 — fetch once, cache once
+
+`scraper/src/main.py` downloads the first catalogue page
+(`https://books.toscrape.com/catalogue/page-1.html`) using a polite
+user-agent and a 10s timeout, then saves the body to
+`scraper/cache/catalogue-page-1.html`. Subsequent runs read the
+cached file instead of hitting the network.
+
+Run output:
+
+```
+$ python3 scraper/src/main.py   # first run
+FETCH: https://books.toscrape.com/catalogue/page-1.html
+bytes: 50,469
+
+$ python3 scraper/src/main.py   # second run
+CACHE HIT: scraper/cache/catalogue-page-1.html
+bytes: 50,469
+```
+
+- User-Agent: `FlyRankInternshipA9/1.0 (+https://github.com/M-Ibraheem0/Polite_Scraper)`
+- Timeout: 10s
+- Only HTTP 200 is treated as success; anything else prints `FETCH FAILED: HTTP <code>` and exits 1.
+- The cache directory is git-ignored; the saved HTML stays on disk for local development only.
