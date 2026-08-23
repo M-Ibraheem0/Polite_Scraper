@@ -21,7 +21,8 @@ ENV/
 # Scraper output (raw HTML + generated data)
 data/raw/
 data/processed/
-output/
+output/*
+!output/books.json
 cache/
 *.html
 !scraper/src/**/*.html

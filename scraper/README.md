@@ -7,7 +7,7 @@ A small, polite scraping pipeline. Stage 0 only: classify the target before writ
 - **Site:** [Books to Scrape](https://books.toscrape.com/) — `https://books.toscrape.com/`
 - **Why this site:** Books to Scrape is a sandbox built for scraping practice. The site explicitly states "We love being scraped!", which is the permission this assignment relies on. A site like this is the only kind this scraper will touch.
 - **Scope:** The first **3 catalogue pages only** (`page-1.html`, `page-2.html`, `page-3.html`). That covers 60 book detail pages out of the 1,000 on the site — a small, fixed slice, not the whole catalogue.
-- **Data collected (planned, from the book detail pages):** title, price, rating, availability, product page URL, and cover image URL.
+- **Data collected (from the book detail pages):** title, price (raw text + normalized GBP number), rating, availability, description, plus the product URL, its source catalogue page, and the fetch timestamp.
 - **Why this is appropriate here:** The site is a sandbox that invites practice traffic, the volume is bounded (60 records), the data is non-personal and non-sensitive, and the work is for a learning pipeline that validates and stores every record as JSON.
 
 ## robots.txt check
@@ -29,8 +29,8 @@ The server returned an nginx welcome page rather than a `robots.txt` body. A mis
 - [x] Stage 2 — discover three catalogue pages
 - [x] Stage 3 — extract book details
 - [x] Stage 4 — validate normalized records
-- [ ] Stage 5 — store
-- [ ] Stage 6 — report
+- [x] Stage 5 — survive failures, report the run
+- [x] Stage 6 — publish scraper evidence
 
 ## Stage 1 — fetch once, cache once
 
@@ -266,14 +266,15 @@ the run aborts (and still writes a report).
 
 `MAX_ATTEMPTS = 2` with `RETRY_DELAY_SECONDS = 1.0`:
 
-| Situation                 | Behaviour                                  |
-|---------------------------|--------------------------------------------|
-| timeout / connection error| wait 1s, retry once; give up if it fails again |
-| 5xx, 408, 425, 429        | wait 1s, retry once; give up if it persists |
-| 404 (does not exist)      | **no retry** — asking again won't create it |
-| 403 (site said no)        | **no retry** — asking again makes a pest   |
+| Situation                  | Behaviour                                      |
+| -------------------------- | ---------------------------------------------- |
+| timeout / connection error | wait 1s, retry once; give up if it fails again |
+| 5xx, 408, 425, 429         | wait 1s, retry once; give up if it persists    |
+| 404 (does not exist)       | **no retry** — asking again won't create it    |
+| 403 (site said no)         | **no retry** — asking again makes a pest       |
 
 Verified with mocked `requests.get` (no real traffic):
+
 ```
 500 then 200        -> status: 200 / calls: 2
 persistent 5xx      -> RuntimeError: retryable HTTP 503 / calls: 2
@@ -296,7 +297,9 @@ Every run ends by writing `output/run-report.json`:
   "valid_records": 60,
   "invalid_records": 0,
   "failed_pages": 1,
-  "failed_page_urls": ["https://books.toscrape.com/catalogue/__made-up-book__/index.html"],
+  "failed_page_urls": [
+    "https://books.toscrape.com/catalogue/__made-up-book__/index.html"
+  ],
   "injected_fake_url": "https://books.toscrape.com/catalogue/__made-up-book__/index.html",
   "duration_seconds": 2.306,
   "started_at": "2026-08-23T19:14:40Z"
@@ -328,3 +331,69 @@ run-report: .../scraper/output/run-report.json
 Checkpoint result: the run finishes (`exit=0`), `output/books.json`
 still holds exactly 60 records, and `run-report.json` shows
 `failed_pages: 1`. A clean run reports `failed_pages: 0`.
+
+## Stage 6 — published evidence
+
+### One real run-report.json
+
+Pasted verbatim from the last clean run (this machine had a warm
+cache, hence `pages_fetched: 0`; a fresh clone's first run reports
+`pages_fetched: 63`, `cache_hits: 0`, and a duration of roughly a
+minute thanks to the 0.5s politeness delay):
+
+```json
+{
+  "catalogue_pages": 3,
+  "pages_fetched": 0,
+  "cache_hits": 63,
+  "book_urls_discovered": 60,
+  "valid_records": 60,
+  "invalid_records": 0,
+  "failed_pages": 0,
+  "failed_page_urls": [],
+  "injected_fake_url": null,
+  "duration_seconds": 1.155,
+  "started_at": "2026-08-23T19:18:27Z"
+}
+```
+
+A stranger who clones the repo can reproduce the same two artifacts —
+`output/books.json` and `output/run-report.json` — with the single
+documented command above, in well under five minutes.
+
+### Why this assignment needed no browser
+
+The data is already in the HTML the server sends — every field we need
+(title, price, rating, availability, description) sits in static markup
+in the raw response — so a headless browser would only add cost: more
+memory, slower fetches, and a bigger attack surface, with zero extra
+data.
+
+### Politeness rules (this scraper's whole point)
+
+- **User-Agent:** `FlyRankInternshipA9/1.0 (+https://github.com/M-Ibraheem0/Polite_Scraper)` — the site owner sees who we are.
+- **Delay:** 0.5s between real network fetches; cached pages never touch the network.
+- **Timeout:** 10s per request; nothing waits forever.
+- **Retry:** timeouts and 5xx are retried once after 1s; 404 and 403 are never retried.
+- **Cache:** every fetched page is saved locally and reused; the site feels a 63-page visit once, not every run.
+- **Scope:** first 3 of 50 catalogue pages — 60 records, never the whole catalogue.
+
+### Ethics note (in my own words)
+
+Use an official API when one exists — it is faster, more stable, and
+respectful. Never bypass logins, paywalls, or blocks: if a site walls
+something off, that wall is the site's answer, and working around it
+is not polite engineering. Collect only what you need, no more. This
+scraper exists because Books to Scrape is a sandbox that explicitly
+invites practice traffic, and it is the only kind of site this code is
+built for.
+
+### Honest limitation
+
+The pipeline's extractors and schema were shaped by the exact markup
+of Books to Scrape. The retry policy, the `price_text` parser, and the
+rating `Literal` are tuned to this sandbox — and while validation and
+the run report will _notice_ a changed page, the scraper will not
+_fix itself_. It is a polite pipeline, not a general-purpose crawler,
+and per the Stage 0 pledge it will not be pointed at another site
+without re-checking that site's rules first.
