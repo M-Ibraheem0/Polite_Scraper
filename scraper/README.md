@@ -28,7 +28,7 @@ The server returned an nginx welcome page rather than a `robots.txt` body. A mis
 - [x] Stage 1 — fetch and cache HTML
 - [x] Stage 2 — discover three catalogue pages
 - [x] Stage 3 — extract book details
-- [ ] Stage 4 — normalize
+- [x] Stage 4 — validate normalized records
 - [ ] Stage 5 — store
 - [ ] Stage 6 — report
 
@@ -146,4 +146,108 @@ rating distribution: [('One', 15), ('Five', 14), ('Three', 13), ('Four', 10), ('
 source pages:         [page-1.html: 20, page-2.html: 20, page-3.html: 20]
 unique product_url:   60
 records with null description: 0  (all 60 happened to have one; the field is null-safe)
+```
+
+## Stage 4 — clean it, check it, store it
+
+`scraper/src/main.py` now runs the full pipeline (discover → extract
+→ normalize → validate → store). The new steps for this stage:
+
+1. **Normalize** — `parse_price_gbp("£51.77")` returns `51.77` via the
+   `PRICE_RE = re.compile(r"£\s*([0-9]+(?:\.[0-9]+)?)")` pattern. The
+   raw `price_text` is kept alongside the clean `price_gbp`, exactly
+   as the assignment requires.
+2. **Validate** — every record is checked against a Pydantic
+   `BookRecord` model:
+
+   ```python
+   class BookRecord(BaseModel):
+       title: str
+       product_url: str   (pattern ^https://)
+       price_text: str
+       price_gbp: float   (gt=0)
+       availability_text: str
+       rating_text: Literal["One","Two","Three","Four","Five"]
+       description: Optional[str] = None
+       source_page: str   (pattern ^https://)
+       fetched_at: str    (pattern ^YYYY-MM-DDTHH:MM:SSZ$)
+   ```
+
+   `description` is the only optional field. URL fields must start
+   with `https://`; the `fetched_at` regex enforces the ISO 8601 UTC
+   shape.
+
+3. **Store** — good records go to `output/books.json`; bad ones go
+   to `output/errors.json` with the raw record and the Pydantic error
+   list. A bad record is **never** silently dropped into `books.json`.
+4. **Idempotency** — `product_url` is the canonical identity. Records
+   are deduped on it, then sorted by it, so re-running the pipeline
+   overwrites the file with the same 60 entries (only the per-record
+   `fetched_at` changes).
+
+```
+$ .venv/bin/python scraper/src/main.py
+raw_records=60
+good_records=60
+error_records=0
+good: .../scraper/output/books.json
+errors: .../scraper/output/errors.json
+```
+
+Sample good record:
+
+```json
+{
+  "title": "A Light in the Attic",
+  "product_url": "https://books.toscrape.com/catalogue/a-light-in-the-attic_1000/index.html",
+  "price_text": "£51.77",
+  "price_gbp": 51.77,
+  "availability_text": "In stock (22 available)",
+  "rating_text": "Three",
+  "description": "It's hard to imagine a world without A Light in the Attic...",
+  "source_page": "https://books.toscrape.com/catalogue/page-1.html",
+  "fetched_at": "2026-08-23T19:01:53Z"
+}
+```
+
+Sample error record (`output/errors.json`) — bad URL + bad rating,
+captured instead of dropped into `books.json`:
+
+```json
+{
+  "record": {
+    "title": "X",
+    "product_url": "http://insecure.example.com/x",
+    "price_text": "£5.00",
+    "availability_text": "In stock",
+    "rating_text": "Seven",
+    "description": null,
+    "source_page": "https://books.toscrape.com/catalogue/page-1.html",
+    "fetched_at": "2026-08-23T19:00:00Z"
+  },
+  "error": [
+    {
+      "type": "string_pattern_mismatch",
+      "loc": ["product_url"],
+      "msg": "String should match pattern '^https://'",
+      ...
+    }
+  ]
+}
+```
+
+Checkpoint verification (after the run, both runs give the same 60):
+
+```
+good: 60 / errors: 0
+keys per record: ['availability_text', 'description', 'fetched_at',
+                  'price_gbp', 'price_text', 'product_url',
+                  'rating_text', 'source_page', 'title']
+every price_gbp is a number:        True  (and > 0)
+every product_url starts https://:   True
+every source_page  starts https://:  True
+every fetched_at ends with Z:        True
+every product_url unique:            True
+sorted by product_url:               True
+price_gbp == float(price_text):      True
 ```
